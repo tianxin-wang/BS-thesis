@@ -204,6 +204,26 @@ single_cell_gate(Bg_2)
 
 #Second gate will be 0.4*FSC.A + 1e+06 > FSC.H and 0.4*FSC.A - 0.1e+06 < FSC.H
 ```
+#Gate on live cells
+```{r, fig.show="hold", out.width="50%"}
+live_cell_gate <- function(Bg) {
+  Bg_sc <- Bg %>% 
+    dplyr::filter(SSC.A > 5e+5 & SSC.A < 7e+6) %>%
+    dplyr::filter(FSC.A > 3e+6 & FSC.A < 1.5e+7) %>%
+    dplyr::filter(0.4*FSC.A + 1e+06 > FSC.H & 0.4*FSC.A - 0.1e+06 < FSC.H)
+  Bg_V445 <- ggplot(Bg_sc,
+                    aes(x=V445.A, y = SSC.A)) +
+    geom_point(size=.1) +
+    geom_density_2d() +
+    scale_x_log10() +
+    #ylim(0, 6e+6) +
+    geom_vline(xintercept = 1e+4)
+  print(Bg_V445)
+}
+
+live_cell_gate(Bg_1)
+live_cell_gate(Bg_2)
+```
 
 
 #Function for filtering and structuring data
@@ -339,7 +359,7 @@ summary_mean <- reporterData_filtered %>%
   group_by(Ratio, Repeat) %>%
   summarize(mean = mean(ratio))
 
-DP_ratio <- summary_mean[summary_mean$Ratio == "WT", "mean"]
+DP_ratio <- summary_mean[summary_mean$Ratio == "WT EGFP-mCherry", "mean"]
 summary_mean <- summary_mean %>%
   mutate(mean = mean * 100 / mean(DP_ratio$mean)) %>%
   mutate(Repeat = as.character(Repeat))
@@ -355,14 +375,15 @@ ggplot(summary_mean, aes(x = Ratio, y = mean, fill = "grey")) +
   geom_dotplot(binaxis='y', stackdir='center', position=position_dodge(0.8)) +
   stat_summary(fun.data=mean_sdl, fun.args = list(mult=1), 
                  geom="pointrange", color="black", position=position_dodge(0.8)) + #Add standard deviation
-  scale_fill_manual(values = c(rep("#4F5457", 1), rep("#4F5457", 14))) +
+  # scale_fill_manual(values = c(rep("#4F5457", 1), rep("#4F5457", 14))) +
   xlab("Reporter to mc-tRNA Ratio") +
   ylab("Normalized GFP signal %") +
-  scale_y_break(c(15,85), scales = 0.5) + 
+  ylim(c(0,110)) + 
+  # scale_y_break(c(15,85), scales = 0.5) + 
   # stat_pvalue_manual(stat.test, label = "p.adj.signif", y.position = 2, x.position = c(2,3,4,5,6), remove.bracket = TRUE) + 
   ggtitle("Relative GFP signal of WT EGFP-mCherry with R to Q mc-tRNA") +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), plot.title = element_text(margin = margin(b = 20))) +
-  theme(text=element_text(size=18, color = "black", family="Helvetica Neue"), axis.text=element_text(size=18, color = "black", family="Helvetica Neue"), panel.background=element_rect(colour="black"))
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), plot.title = element_text(margin = margin(b = 20)))
+  # theme(text=element_text(size=18, color = "black", family="Helvetica Neue"), axis.text=element_text(size=18, color = "black", family="Helvetica Neue"), panel.background=element_rect(colour="black"))
 
 # ggsave("./R to Q 5e+4 no normalization.png",units="cm",dpi=300,height = 15,width= 20,device="png")
 ```
@@ -403,11 +424,8 @@ ggsave("./no_DP.png",units="cm",dpi=300,height = 15,width= 20,device="png")
 
 # Density plots
 ```{r}
-reporterData_filtered_2 <- reporterData_filtered %>%
-  rename('Reporter : mc-tRNA' = "Ratio")
-
 density_plot <- ggplot() +
-  geom_density(data = reporterData_filtered_2, aes(x = ratio, color = Ratio, fill = Ratio), alpha = 0.3) +
+  geom_density(data = reporterData_filtered, aes(x = ratio, color = Ratio, fill = Ratio), alpha = 0.3) +
   scale_x_log10nice() +
   xlab("EGFP/mCherry ratio") +
   ylab("Density") +
