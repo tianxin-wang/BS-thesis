@@ -1,0 +1,421 @@
+---
+title: "mc-tRNA to Reporter Ratio Analysis"
+author: "Cynthia Wang"
+date: "2023-10-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/Users/cynthiawang/Desktop/UChicago/Junior Yr/Quarter III/Pan Lab/")
+opts_chunk$set(fig.show = "hold")
+```
+
+#library
+```{r}
+#Import packages for plotting and data manipulation.
+library(ggplot2) #Praise be to Hadley
+library(scales)
+library(reshape2)
+library(tidyr)
+library(dplyr) #its important that this is after tidyr I think
+
+library(grid) #for faceting figures
+library(gridExtra) #more grid
+library(ggh4x) #For nested faceting
+library(ggpubr) #pables and p-values
+library(errors) #for error propegation
+library(gtools) #Combinations and permutations
+
+#Reading in svg files into r for ggplotting
+library(grImport2)
+# library(grConvert)
+#Reading and plotting jpeg and PNG
+library(jpeg)
+library(png) #save hiRes png figures
+library(svglite) #for saving SVG figures with arbitrary resolution
+
+library(ggrepel) #The fanciest figure labels
+library(stringr) #playig games with strings for labels
+library(forcats) #Categorical variables need love too
+library(readxl) #Read in excel data
+
+#Power analysis and ROC curves
+library(pwr)
+library(pROC)
+
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("flowCore")
+library(flowCore) # Core package
+
+
+#if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+#BiocManager::install("flowViz")
+library(flowViz) # Vizualization package
+
+
+#install.packages("devtools")
+# library(devtools)
+# install_github("ctriandafillou/cat.extras")
+# install_github("ctriandafillou/flownalysis")
+library(flownalysis)
+library(cat.extras)
+
+#For nice log labels
+#library(cat.extras)
+#library(plotly)
+
+#library(extrafont) #We want the fonts
+#font_import() #Gotta get those fonts
+#loadfonts() #oowww!
+
+library(ggbreak)
+library(patchwork)
+library(rstatix)
+library(tidyverse)
+
+library(writexl)
+
+#Set the global figure theme now
+theme_set(
+  theme_bw() + theme(#legend.position = "None", 
+        text = element_text(family = "Arial", size = 14),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(color = "black"),
+        strip.background = element_blank())
+  )
+
+#Define a function that excludes things
+`%nin%` = Negate(`%in%`)
+
+empty_graph <- ggplot() + theme_void()
+```
+
+#read in data
+```{r}
+#read flowdata of 1 sample
+read_data <- function(Dir, Sample_name, Repeat = 1){
+    path <- paste0(Dir,Sample_name, "//")
+    flowdata <- read.flowSet(path = path, alter.names = T, truncate_max_range =F)
+    flowdata <- merge_flowSet(flowdata, method = "old") %>%
+    mutate(Sample = Sample_name, Repeat = Repeat)
+    return(flowdata)
+}
+
+dir1 = "./20231031 CW mc-tRNA to reporter ratio test/"
+
+ctrls <- read_data(dir1, "Ctrls", Repeat = 1)
+exps <- read_data(dir1, "Exps", Repeat = 1)
+```
+
+#Organize data
+```{r}
+# re-modifying the Sample column for all data
+reps <- c("ctrls", "exps")
+for (rep in reps) {
+  assign(rep, transform(get(rep), Sample = str_split_i(str_split_i(exp, "_", -1), ".fcs", 1)))
+  # assign(rep, mutate(get(rep), Sample = gsub("Sample", "", Sample)))
+}
+
+Bg <- ctrls %>% dplyr::filter(Sample == "Sample1" | Sample == "Sample2") %>%
+  mutate(Repeat = case_when(
+    Sample == "Sample1" ~ 1,  # Set Repeat to 1 where Sample is "Sample1"
+    Sample == "Sample2" ~ 2  # Set Repeat to 2 where Sample is "Sample2"
+  ))
+DAPI <- ctrls %>% dplyr::filter(Sample == "Sample4" | Sample == "Sample5") %>%
+  mutate(Repeat = case_when(
+    Sample == "Sample4" ~ 1,  
+    Sample == "Sample5" ~ 2 
+  ))
+mCherry <- ctrls %>% dplyr::filter(Sample == "Sample7" | Sample == "Sample8") %>%
+  mutate(Repeat = case_when(
+    Sample == "Sample7" ~ 1, 
+    Sample == "Sample8" ~ 2
+  ))
+GFP <- ctrls %>% dplyr::filter(Sample == "Sample10" | Sample == "Sample11" | Sample == "Sample12") %>%
+  mutate(Repeat = case_when(
+    Sample == "Sample10" ~ 1,  
+    Sample == "Sample11" ~ 2,  
+    Sample == "Sample12" ~ 3
+  ))
+
+Bg_1 <- Bg %>% dplyr::filter(Repeat == 1)
+Bg_2 <- Bg %>% dplyr::filter(Repeat == 2)
+DAPI_1 <- DAPI %>% dplyr::filter(Repeat == 1)
+DAPI_2 <- DAPI %>% dplyr::filter(Repeat == 2)
+mCherry_1 <- mCherry %>% dplyr::filter(Repeat == 1)
+mCherry_2 <- mCherry %>% dplyr::filter(Repeat == 2)
+GFP_1 <- GFP %>% dplyr::filter(Repeat == 1)
+GFP_2 <- GFP %>% dplyr::filter(Repeat == 2)
+GFP_3 <- GFP %>% dplyr::filter(Repeat == 3)
+```
+
+#Gate on size
+```{r, fig.show="hold", out.width="50%"}
+#Looking here, the easiest filter is just forward  scatter
+size_gate <- function(Bg) {
+  Bg_FSCA_SSCA <- ggplot(Bg,
+         aes(x=FSC.A, SSC.A)) +
+    geom_point(size=.1) +
+    geom_density_2d() +
+    # stat_density_2d(aes(fill = ..level..), geom = "polygon", colour="white") +
+    #scale_x_log10() +
+    #scale_y_log10() +
+    # geom_abline(slope=1, intercept = 0) +
+    geom_vline(xintercept = 3e+6) +
+    geom_vline(xintercept = 3e+7) +
+    geom_hline(yintercept = 5e+5) +
+    geom_hline(yintercept = 1.5e+7) +
+    xlim(0, 4e+7) +
+    ylim(0, 3e+7) 
+  print(Bg_FSCA_SSCA)
+}
+
+size_gate(Bg_1)
+size_gate(Bg_2)
+#First gate will be 3e+6 < FSC.A < 3e+7  and 5e+5 < SSC.A < 1.5e+7
+```
+
+#Gate on single cells
+```{r, fig.show="hold", out.width="50%"}
+single_cell_gate <- function(Bg) {
+  Bg_SSCA_SSCH <- ggplot(Bg,
+         aes(x=SSC.A, SSC.H)) +
+    geom_point(size=.1) +
+    geom_density_2d() +
+    # stat_density_2d(aes(fill = ..level..), geom = "polygon", colour="white") +
+    geom_abline(slope = 0.4, intercept = 1e+06) +
+    geom_abline(slope = 0.4, intercept = -1e+06) +
+    xlim(0,1e+7) +
+    ylim(0,1e+7)
+    #scale_x_log10() +  
+    #scale_y_log10() 
+    #geom_smooth(method = "lm", se = FALSE) 
+  print(Bg_SSCA_SSCH)
+}
+
+single_cell_gate(Bg_1)
+single_cell_gate(Bg_2)
+
+#Second gate will be 0.4*FSC.A + 1e+06 > FSC.H and 0.4*FSC.A - 0.1e+06 < FSC.H
+```
+
+
+#Function for filtering and structuring data
+```{r}
+Flow_filter <- function (data, SSC.A_min = 5e+5, SSC.A_max = 1.5e+7, FSC.A_min = 3e+6, FSC.A_max = 3e+7, sc_coef = 0.4, sc_intercept = 1e+06, V445.A_max= 1e+4) {
+  data_sc <- data %>% 
+    dplyr::filter(SSC.A > SSC.A_min & SSC.A < SSC.A_max) %>%
+    dplyr::filter(FSC.A > FSC.A_min & FSC.A < FSC.A_max) %>%
+    dplyr::filter(sc_coef*FSC.A + sc_intercept > FSC.H & sc_coef*FSC.A - sc_intercept < FSC.H) %>%
+    dplyr::filter(V445.A <= V445.A_max)
+}
+```
+
+#Gating and Structuring
+```{r}
+# reporter1 <- subset(rep1, !(Sample %in% c("Sample1", "Sample2", "Sample3", "Sample4")))
+# reporter1_filtered <- Flow_filter(reporter1) %>% 
+#   select("Sample", "Repeat", "Y615.A", "B525.A") 
+# 
+# reporter2_filtered <- Flow_filter(rep2) %>% select("Sample", "Repeat", "Y615.A", "B525.A") 
+# 
+# reporter3_filtered <- Flow_filter(rep3) %>% select("Sample", "Repeat", "Y615.A", "B525.A") 
+
+reporterData <- Flow_filter(exps) %>% select("Sample", "Repeat", "Y615.A", "B525.A")
+head(reporterData)
+```
+
+#Gate on GFP
+```{r, fig.show="hold", out.width="50%"}
+#Y615.A == mCherry; B525.A == GFP
+GFP_gate <- function(mCherry) {
+  mCherry_filtered <- Flow_filter(mCherry)
+  mCherry_Y615_B525 <- ggplot(mCherry_filtered,
+         aes(x=Y615.A, B525.A)) +
+    geom_point(size=.1) +
+    geom_density_2d() +
+    # stat_density_2d(aes(fill = ..level..), geom = "polygon", colour="white") +
+    scale_x_log10() +
+    scale_y_log10() +
+    # geom_abline(slope=1, intercept = 0) +
+    geom_hline(yintercept = 1e+4)
+  print(mCherry_Y615_B525)
+}
+
+GFP_gate(Flow_filter(mCherry_1))
+GFP_gate(Flow_filter(mCherry_2))
+```
+
+#Gate on mCherry
+```{r, fig.show="hold", out.width="50%"}
+#Y615.A == mCherry; B525.A == GFP
+mCherry_gate <- function(GFP) {
+  GFP_filtered <- Flow_filter(GFP)
+  GFP_Y615_B525 <- ggplot(GFP_filtered,
+         aes(x=Y615.A, B525.A)) +
+    geom_point(size=.1) +
+    geom_density_2d() +
+    # stat_density_2d(aes(fill = ..level..), geom = "polygon", colour="white") +
+    scale_x_log10() +
+    scale_y_log10() +
+    # geom_abline(slope=1, intercept = 0) +
+    geom_hline(yintercept = 1e+4) +
+    geom_vline(xintercept = 1e+5)
+  print(GFP_Y615_B525)
+}
+
+mCherry_gate(Flow_filter(GFP_1))
+mCherry_gate(Flow_filter(GFP_2))
+mCherry_gate(Flow_filter(GFP_3))
+```
+
+# Filtering & further structuring of all reporter & DP data
+```{r}
+#Y615.A == mCherry; B525.A == GFP
+#Strict gates
+reporterData_filtered <- reporterData %>%
+  dplyr::filter(Y615.A > 3e+4) %>%
+  dplyr::filter(B525.A > 0) %>%
+  mutate(ratio = B525.A/Y615.A) %>%
+  mutate(Repeat = recode(Sample,
+                         "Sample1" = 1,
+                         "Sample2" = 2,
+                         "Sample3" = 3,
+                         "Sample4" = 1,
+                         "Sample5" = 2,
+                         "Sample6" = 3,
+                         "Sample7" = 1,
+                         "Sample8" = 2,
+                         "Sample9" = 3,
+                         "Sample10" = 1,
+                         "Sample11" = 2,
+                         "Sample12" = 3,
+                         "Sample13" = 1,
+                         "Sample14" = 2,
+                         "Sample15" = 3,
+                         "Sample16" = 1,
+                         "Sample17" = 2,
+                         "Sample18" = 3))
+
+```
+
+# Exporting data as excel and importing excel as R dataframe
+```{r}
+file_path <- "./mctRNA_Reporter_Ratio_Data.csv"
+# write.csv(reporterData_filtered, file_path, row.names = FALSE)
+# 
+reporterData_filtered <- read.csv(file_path)
+```
+
+# Labeling and Plotting data
+```{r}
+reporterData_filtered$Ratio <- recode(reporterData_filtered$Sample,
+                                 "Sample1" = "2:1",
+                                 "Sample2" = "2:1",
+                                 "Sample3" = "2:1",
+                                 "Sample4" = "1:1",
+                                 "Sample5" = "1:1",
+                                 "Sample6" = "1:1",
+                                 "Sample7" = "1:2",
+                                 "Sample8" = "1:2",
+                                 "Sample9" = "1:2",
+                                 "Sample10" = "1:4",
+                                 "Sample11" = "1:4",
+                                 "Sample12" = "1:4",
+                                 "Sample13" = "EGFP(R96Q)-mCherry",
+                                 "Sample14" = "EGFP(R96Q)-mCherry",
+                                 "Sample15" = "EGFP(R96Q)-mCherry",
+                                 "Sample16" = "WT EGFP-mCherry",
+                                 "Sample17" = "WT EGFP-mCherry",
+                                 "Sample18" = "WT EGFP-mCherry")
+
+summary_mean <- reporterData_filtered %>%
+  group_by(Ratio, Repeat) %>%
+  summarize(mean = mean(ratio))
+
+DP_ratio <- summary_mean[summary_mean$Ratio == "WT", "mean"]
+summary_mean <- summary_mean %>%
+  mutate(mean = mean * 100 / mean(DP_ratio$mean)) %>%
+  mutate(Repeat = as.character(Repeat))
+
+treatment_order = c("WT EGFP-mCherry", "EGFP(R96Q)-mCherry", "2:1", "1:1", "1:2", "1:4")
+
+stat.test <- t_test(as.data.frame(summary_mean), mean ~ Ratio, ref.group="2:1")
+
+summary_mean$Ratio <- factor(summary_mean$Ratio,
+                         levels = treatment_order)
+
+ggplot(summary_mean, aes(x = Ratio, y = mean, fill = "grey")) +
+  geom_dotplot(binaxis='y', stackdir='center', position=position_dodge(0.8)) +
+  stat_summary(fun.data=mean_sdl, fun.args = list(mult=1), 
+                 geom="pointrange", color="black", position=position_dodge(0.8)) + #Add standard deviation
+  scale_fill_manual(values = c(rep("#4F5457", 1), rep("#4F5457", 14))) +
+  xlab("Reporter to mc-tRNA Ratio") +
+  ylab("Normalized GFP signal %") +
+  scale_y_break(c(15,85), scales = 0.5) + 
+  # stat_pvalue_manual(stat.test, label = "p.adj.signif", y.position = 2, x.position = c(2,3,4,5,6), remove.bracket = TRUE) + 
+  ggtitle("Relative GFP signal of WT EGFP-mCherry with R to Q mc-tRNA") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), plot.title = element_text(margin = margin(b = 20))) +
+  theme(text=element_text(size=18, color = "black", family="Helvetica Neue"), axis.text=element_text(size=18, color = "black", family="Helvetica Neue"), panel.background=element_rect(colour="black"))
+
+# ggsave("./R to Q 5e+4 no normalization.png",units="cm",dpi=300,height = 15,width= 20,device="png")
+```
+```{r}
+only_DP <- summary_mean %>%
+  dplyr::filter(Ratio == "WT EGFP-mCherry")
+
+ggplot(only_DP, aes(x = Ratio, y = mean, fill = "grey")) +
+  geom_dotplot(binaxis='y', stackdir='center', position=position_dodge(0.8)) +
+  stat_summary(fun.data=mean_sdl, fun.args = list(mult=1), 
+                 geom="pointrange", color="black", position=position_dodge(0.8)) + #Add standard deviation
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_fill_manual(values = c(rep("#4F5457", 1), rep("#4F5457", 14))) +
+  xlab("Reporter to mc-tRNA Ratio") +
+  ylab("Normalized GFP signal %") +
+  ylim(c(85,110)) + 
+  # stat_pvalue_manual(stat.test, label = "p.adj.signif", y.position = 2, x.position = c(2,3,4,5,6), remove.bracket = TRUE) + 
+  ggtitle("Relative GFP signal of WT EGFP-mCherry with R to Q mc-tRNA") +
+  theme(text=element_text(size=18, color = "black", family="Helvetica Neue"), axis.text=element_text(size=18, color = "black", family="Helvetica Neue"), panel.background=element_rect(colour="black"))
+ggsave("./only_DP.png",units="cm",dpi=300,height = 15,width= 20,device="png")
+
+no_DP <- summary_mean %>%
+  dplyr::filter(Ratio != "WT EGFP-mCherry")
+ggplot(no_DP, aes(x = Ratio, y = mean, fill = "grey")) +
+  geom_dotplot(binaxis='y', stackdir='center', position=position_dodge(0.8)) +
+  stat_summary(fun.data=mean_sdl, fun.args = list(mult=1), 
+                 geom="pointrange", color="black", position=position_dodge(0.8)) + #Add standard deviation
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_fill_manual(values = c(rep("#4F5457", 1), rep("#4F5457", 14))) +
+  xlab("Reporter to mc-tRNA Ratio") +
+  ylab("Normalized GFP signal %") +
+  ylim(c(0,4)) + 
+  # stat_pvalue_manual(stat.test, label = "p.adj.signif", y.position = 2, x.position = c(2,3,4,5,6), remove.bracket = TRUE) + 
+  ggtitle("Relative GFP signal of WT EGFP-mCherry with R to Q mc-tRNA") +
+  theme(text=element_text(size=18, color = "black", family="Helvetica Neue"), axis.text=element_text(size=18, color = "black", family="Helvetica Neue"), panel.background=element_rect(colour="black"))
+ggsave("./no_DP.png",units="cm",dpi=300,height = 15,width= 20,device="png")
+```
+
+# Density plots
+```{r}
+reporterData_filtered_2 <- reporterData_filtered %>%
+  rename('Reporter : mc-tRNA' = "Ratio")
+
+density_plot <- ggplot() +
+  geom_density(data = reporterData_filtered_2, aes(x = ratio, color = Ratio, fill = Ratio), alpha = 0.3) +
+  scale_x_log10nice() +
+  xlab("EGFP/mCherry ratio") +
+  ylab("Density") +
+  labs(title = "Percentage of GFP Rescue per Population") 
+  # theme(text = element_text(size = 18, color = "black", family = "Helvetica Neue"),
+  #       axis.text = element_text(size = 18, Niue = "black", family = "Helvetica Neue"),
+  #       panel.background = element_rect(color = "black"),
+  #       plot.title = element_text(hjust = 0.5))
+density_plot
+```
+
